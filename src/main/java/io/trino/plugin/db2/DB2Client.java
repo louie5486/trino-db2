@@ -24,7 +24,8 @@ import io.trino.plugin.jdbc.ObjectReadFunction;
 import io.trino.plugin.jdbc.ObjectWriteFunction;
 import io.trino.plugin.jdbc.QueryBuilder;
 import io.trino.plugin.jdbc.WriteMapping;
-import io.trino.plugin.jdbc.mapping.IdentifierMapping;
+import io.trino.plugin.jdbc.logging.RemoteQueryModifier;
+import io.trino.plugin.base.mapping.IdentifierMapping;
 import io.trino.spi.TrinoException;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.SchemaTableName;
@@ -37,7 +38,7 @@ import io.trino.spi.type.Type;
 import io.trino.spi.type.TypeManager;
 import io.trino.spi.type.VarcharType;
 
-import javax.inject.Inject;
+import com.google.inject.Inject;
 
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -45,6 +46,7 @@ import java.sql.Timestamp;
 import java.sql.Types;
 import java.util.List;
 import java.util.Optional;
+import io.trino.plugin.jdbc.JdbcTableHandle;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Verify.verify;
@@ -116,11 +118,11 @@ public class DB2Client
             DB2Config db2config,
             ConnectionFactory connectionFactory,
             QueryBuilder queryBuilder,
-            TypeManager typeManager,
-            IdentifierMapping identifierMapping)
+            IdentifierMapping identifierMapping,
+            RemoteQueryModifier remoteQueryModifier)
             throws SQLException
     {
-        super(config, "\"", connectionFactory, queryBuilder, identifierMapping);
+        super("\"", connectionFactory, queryBuilder, config.getJdbcTypesMappedToVarchar(), identifierMapping, remoteQueryModifier, true);
         this.varcharMaxLength = db2config.getVarcharMaxLength();
 
         // http://stackoverflow.com/questions/16910791/getting-error-code-4220-with-null-sql-state
@@ -128,10 +130,10 @@ public class DB2Client
     }
 
     @Override
-    public Connection getConnection(ConnectorSession session, JdbcSplit split)
+    public Connection getConnection(ConnectorSession session, JdbcSplit split, JdbcTableHandle tableHandle)
             throws SQLException
     {
-        Connection connection = super.getConnection(session, split);
+        Connection connection = super.getConnection(session, split, tableHandle);
         try {
             // TRANSACTION_READ_UNCOMMITTED = Uncommitted read
             // http://www.ibm.com/developerworks/data/library/techarticle/dm-0509schuetz/
@@ -152,7 +154,7 @@ public class DB2Client
             return mapping;
         }
 
-        switch (typeHandle.getJdbcType()) {
+        switch (typeHandle.jdbcType()) {
             case Types.BIT:
             case Types.BOOLEAN:
                 return Optional.of(booleanColumnMapping());
@@ -178,8 +180,8 @@ public class DB2Client
 
             case Types.NUMERIC:
             case Types.DECIMAL:
-                int decimalDigits = typeHandle.getRequiredDecimalDigits();
-                int precision = typeHandle.getRequiredColumnSize() + max(-decimalDigits, 0); // Map decimal(p, -s) (negative scale) to decimal(p+s, 0).
+                int decimalDigits = typeHandle.requiredDecimalDigits();
+                int precision = typeHandle.requiredColumnSize() + max(-decimalDigits, 0); // Map decimal(p, -s) (negative scale) to decimal(p+s, 0).
                 if (precision > Decimals.MAX_PRECISION) {
                     break;
                 }
@@ -187,10 +189,10 @@ public class DB2Client
 
             case Types.CHAR:
             case Types.NCHAR:
-                return Optional.of(defaultCharColumnMapping(typeHandle.getRequiredColumnSize(), false));
+                return Optional.of(defaultCharColumnMapping(typeHandle.requiredColumnSize(), false));
 
             case Types.VARCHAR:
-                int columnSize = typeHandle.getRequiredColumnSize();
+                int columnSize = typeHandle.requiredColumnSize();
                 if (columnSize == -1) {
                     return Optional.of(varcharColumnMapping(createUnboundedVarcharType(), true));
                 }
@@ -199,7 +201,7 @@ public class DB2Client
             case Types.NVARCHAR:
             case Types.LONGVARCHAR:
             case Types.LONGNVARCHAR:
-                return Optional.of(defaultVarcharColumnMapping(typeHandle.getRequiredColumnSize(), false));
+                return Optional.of(defaultVarcharColumnMapping(typeHandle.requiredColumnSize(), false));
 
             case Types.BINARY:
             case Types.VARBINARY:
@@ -214,7 +216,7 @@ public class DB2Client
                 return Optional.of(timeColumnMappingUsingSqlTime());
 
             case Types.TIMESTAMP:
-                TimestampType timestampType = typeHandle.getDecimalDigits()
+                TimestampType timestampType = typeHandle.decimalDigits()
                         .map(TimestampType::createTimestampType)
                         .orElse(TIMESTAMP_MILLIS);
                 return Optional.of(timestampColumnMapping(timestampType));
@@ -380,7 +382,7 @@ public class DB2Client
                     "RENAME TABLE %s TO %s",
                     quoted(catalogName, schemaName, tableName),
                     quoted(newTableName));
-            execute(connection, sql);
+            execute(session, connection, sql);
         }
         catch (SQLException e) {
             throw new TrinoException(JDBC_ERROR, e);
@@ -388,7 +390,7 @@ public class DB2Client
     }
 
     @Override
-    protected void copyTableSchema(Connection connection, String catalogName, String schemaName, String tableName, String newTableName, List<String> columnNames)
+    protected void copyTableSchema(ConnectorSession session, Connection connection, String catalogName, String schemaName, String tableName, String newTableName, List<String> columnNames)
     {
         String sql = format(
                 "CREATE TABLE %s AS (SELECT %s FROM %s) WITH NO DATA",
@@ -397,6 +399,11 @@ public class DB2Client
                         .map(this::quoted)
                         .collect(joining(", ")),
                 quoted(catalogName, schemaName, tableName));
-        execute(connection, sql);
+        try {
+            execute(session, connection, sql);
+        }
+        catch (SQLException e) {
+            throw new TrinoException(JDBC_ERROR, e);
+        }
     }
 }
