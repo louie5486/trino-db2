@@ -11,6 +11,14 @@ See [DEVELOPMENT](DEVELOPMENT.md) for information on development process.
 It supports read/write Timestamp data type up to precision `9` while
 higher precision will not be preserved. 
 
+## Build Trino docker image with DB2 plugin pre-installed
+
+Clone this directory and issue the following command:
+
+```
+docker build -t trino-db2 --build-arg BASE="trinodb/trino:469" .
+```
+
 ## Connection Configuration
 
 Create new properties file like `<catalog-name>.properties` inside `etc/catalog` dir:
