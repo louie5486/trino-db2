@@ -1,5 +1,5 @@
 ARG BASE
-FROM docker.io/library/maven:3.6.3-openjdk-11 AS builder
+FROM openjdk:23-jdk-slim AS builder
 WORKDIR /root/trino-db2
 COPY . /root/trino-db2
 ENV MAVEN_FAST_INSTALL="-DskipTests -Dair.check.skip-all=true -Dmaven.javadoc.skip=true -B -q -T C1"
