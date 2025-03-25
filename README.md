@@ -16,7 +16,7 @@ higher precision will not be preserved.
 Clone this directory and issue the following command:
 
 ```
-docker build -t trino-db2 --build-arg BASE="trinodb/trino:469" .
+docker build -t trino-db2 --build-arg BASE="trinodb/trino:472" .
 ```
 
 ## Connection Configuration
